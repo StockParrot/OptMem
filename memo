@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """OptMem: a permanent, append-only memory for AI agents.
 
-  {memo} init             create this memory; print the setup block.
+  {memo} init [--here]    give THIS project a memory; make ./memo/.
+  {memo} prompt           print the setup block, and create nothing.
   {memo} wake [part [T]]  read your memory. Run first, every session.
   {memo} note "..."       record one memory: one short line.
   {memo} nap [id "..."]   do the pending compressions.
@@ -11,8 +12,13 @@
   {memo} config [NAME=N]  show this memory's sizes, or change one.
   {memo} import <file>    bulk-load dated memories (bootstrap only).
 
-The memories live in ~/.optmem/memory, or in $MEMORY_DIR if set.
-See github.com/VictorTaelin/OptMem.
+Memory is PER PROJECT. Each project keeps its own `memo/` folder, and the
+tool finds it by walking up from the current directory -- the way git finds
+`.git`. So the same tool, run in two projects, reads two separate memories
+and can never mix them. $MEMORY_DIR still overrides everything, naming one
+store outright.
+
+See github.com/StockParrot/OptMem, forked from github.com/VictorTaelin/OptMem.
 """
 
 import datetime
@@ -133,17 +139,59 @@ def cover(T, budget):
 
 # ---------------------------------------------------------------- store
 
+# The folder a project keeps its memory in, sitting at the project's root.
+# It holds LOG.txt and TREE/ directly -- it IS the store, not its parent.
+STORE_NAME = "memo"
+
+
+def find_up(start):
+    """The nearest project memory at or above `start`, or None.
+
+    Walk up the directory chain looking for a `memo/` folder, exactly the way
+    git looks for `.git`. This is what makes memory per-project: the answer
+    depends on WHERE the tool was run, so the same tool serves every project
+    without a single line of configuration and without ever mixing two.
+
+    The first hit wins, so a nested project shadows its parent -- the memory
+    you get is always the closest one, which is the one you are working in."""
+    here = os.path.abspath(start)
+    while True:
+        candidate = os.path.join(here, STORE_NAME)
+        # isdir, not exists: this repository ships a FILE named `memo` (the
+        # tool). A file of that name is not a store and must not be mistaken
+        # for one -- we keep climbing past it.
+        if os.path.isdir(candidate):
+            return candidate
+        parent = os.path.dirname(here)
+        if parent == here:  # reached the filesystem root, found nothing
+            return None
+        here = parent
+
+
 def memory_dir():
-    return os.path.expanduser(os.environ.get("MEMORY_DIR") or "~/.optmem/memory")
+    """Which one store this process uses, or None if there is no project
+    memory anywhere above us.
+
+    $MEMORY_DIR still wins outright: it names a store directly, for a synced
+    folder, a test, or a memory kept outside its project. With it unset, the
+    store is discovered from the current directory."""
+    env = os.environ.get("MEMORY_DIR")
+    if env:
+        return os.path.expanduser(env)
+    return find_up(os.getcwd())
 
 
 def store():
     d = memory_dir()
     # The directory is only ever created by `memo init`: creating it IS
-    # creating the identity, and that is a deliberate act. If any other
-    # command created it, a typo in MEMORY_DIR would silently open an empty
-    # store, and the agent would wake with no past and write a second
-    # identity.
+    # creating this project's memory, and that is a deliberate act. If any
+    # other command created it, a typo in MEMORY_DIR -- or simply standing in
+    # the wrong folder -- would silently open an empty store, and the agent
+    # would wake with no past and start a second, parallel record.
+    if d is None:
+        die("No memory for this project.\nNothing named %s/ exists here or in "
+            "any folder above %s.\nTo give this project a memory, run: %s init"
+            % (STORE_NAME, pretty(os.getcwd()), ME))
     if not os.path.isdir(d):
         die("No memory at %s.\nTo create one, run: %s init\n"
             "To use an existing one, point MEMORY_DIR at it." % (d, ME))
@@ -501,10 +549,11 @@ TEMPLATE = """\
 
 Your memory is OptMem:
 - The tool is `{memo}`
-- Your memories are in `{data}`
+- Your memories live in the `{data}/` folder at the root of the project
+  you are working in.
 
 OptMem outlives every session, compaction, model and vendor change.
-Without it you do not know who you are, or what was decided and tried.
+Without it you do not know what was decided and tried.
 
 ### At startup: activating OptMem (mandatory)
 
@@ -522,7 +571,7 @@ Do not register redundant memories.
 
 If `{memo} note` asks a compression: do it before your next action.
 
-Never edit or delete anything under `{data}`: the tool manages it.
+Never edit or delete anything under `{data}/`: the tool manages it.
 
 ### When you need an old memory: search, or navigate
 
@@ -542,28 +591,116 @@ When you spawn one, write: `You are a subagent. Don't run memo.`
 """
 
 
-def cmd_init(d, args):
-    """The one command that may create the memory directory, and the whole
-    setup: make the store, write the size knobs, print the block the user
-    pastes into their agent's instruction file. Re-running it is safe: it
-    only ever creates what is missing, and never rewrites what is there."""
-    if args:
-        die("usage: %s init" % ME)
-    fresh = not os.path.isdir(d)
+def init_target():
+    """Where `memo init` would create a memory: the store $MEMORY_DIR names,
+    or else `./memo` -- the project whose folder we are standing in.
+
+    Note this is NOT memory_dir(): that one searches upward for an existing
+    memory, while init deliberately looks only at the current directory. You
+    initialise the project you are in, never one of its parents."""
+    env = os.environ.get("MEMORY_DIR")
+    if env:
+        return os.path.expanduser(env)
+    return os.path.join(os.path.abspath(os.getcwd()), STORE_NAME)
+
+
+def create_store(d):
+    """Bring a memory into being at `d`, or finish a half-made one.
+
+    `init` and the first `wake` in a fresh project both land here, so there is
+    exactly one definition of what a memory IS. Every step only creates what
+    is missing, which is what makes running it again harmless."""
     os.makedirs(os.path.join(d, "TREE"), exist_ok=True)
     open(log_path(d), "a").close()
     if not os.path.exists(os.path.join(d, "config")):
         write_config(d, {})
     config(d)
+
+
+def wake_store():
+    """The store `wake` reads -- created here if this project has none yet.
+
+    Every other command refuses when there is no memory, and that refusal is
+    what stops a typo, or standing in the wrong folder, from quietly becoming
+    a second empty identity. `wake` is the one exception, and can afford to
+    be: it is the first command of every session, so there is nothing yet to
+    lose, and making a session stop to run `init` and wake a second time
+    spends two round trips to arrive exactly where this arrives in one.
+
+    $MEMORY_DIR is still refused when it points at nothing. That is an
+    explicit claim about one specific memory, and the answer to a typo in it
+    must never be a blank one."""
+    if os.environ.get("MEMORY_DIR"):
+        return store()  # explicit: that store exists, or this is an error
+    if find_up(os.getcwd()) is not None:
+        return store()
+    # Nothing at all above us. So there is no memory here to shadow and none
+    # to mistake this for -- the only thing that can be wrong is the folder,
+    # and naming the folder out loud is what keeps that recoverable.
+    d = os.path.join(os.path.abspath(os.getcwd()), STORE_NAME)
+    create_store(d)
+    print("Created %s: this project's memory, from here on, forever."
+          % pretty(d))
+    print("If that is not this project's root, delete it and run `%s init` "
+          "where you meant.\n" % ME)
+    return d
+
+
+def cmd_init(d, args):
+    """Create a memory for this project, deliberately and by name.
+
+    `wake` creates one too, when it finds none. This command still earns its
+    place: it puts the memory exactly where you say rather than where the
+    session happens to start, and it is the only way to place a nested one."""
+    here = False
+    for a in args:
+        if a == "--here":
+            here = True
+        else:
+            die("usage: %s init [--here]" % ME)
+    fresh = not os.path.isdir(d)
+    # A project inside a project. Creating a memory here would SHADOW the one
+    # above -- every later command would find this one first, and the older
+    # record would go quiet without a word. That is exactly the silent second
+    # identity the tool exists to prevent, so it is refused by default and
+    # allowed only when asked for outright.
+    if fresh and not os.environ.get("MEMORY_DIR"):
+        above = find_up(os.getcwd())
+        if above:
+            if not here:
+                die("This folder is already covered by the memory at %s.\n"
+                    "Work here and that memory is the one you get.\n"
+                    "To give this folder a separate memory that hides it, "
+                    "run: %s init --here" % (pretty(above), ME))
+            print("Note: this memory hides the one at %s." % pretty(above))
+    create_store(d)
     if fresh:
-        print("Created %s: this machine's memory, one identity, forever." % pretty(d))
+        print("Created %s: this project's memory, from here on, forever."
+              % pretty(d))
     else:
         print("Found %s: %s." % (pretty(d), plural(log_len(d), "memory")))
     print("Sizes live in %s/config; the defaults are fine." % pretty(d))
+    print("Run: %s wake" % ME)
+
+
+def cmd_prompt(d, args):
+    """Print the block the user pastes into their agent's instruction file,
+    and create nothing at all.
+
+    This is separate from `init` because the two now happen at different
+    moments and different scopes: the block is pasted ONCE, into a global
+    CLAUDE.md, and from then on it covers every project; `init` runs once per
+    project. Keeping them apart also lets the installer print the block
+    without creating a memory in whatever folder the curl happened to run
+    in."""
+    if args:
+        die("usage: %s prompt" % ME)
+    print("Paste this once at the top of your agent's global AGENTS.md (or")
+    print("CLAUDE.md). It then covers every project on this machine:")
     print()
-    print("Paste this at the top of your agent's AGENTS.md (or CLAUDE.md), done:")
+    print(TEMPLATE.format(memo=ME, data=STORE_NAME, chars=ENTRY_CHARS).rstrip())
     print()
-    print(TEMPLATE.format(memo=ME, data=pretty(d), chars=ENTRY_CHARS).rstrip())
+    print("Then, inside each project you want remembered, run: %s init" % ME)
 
 
 def paginate(lines):
@@ -823,9 +960,10 @@ def cmd_import(d, args):
         print("%s pending. Run: %s nap" % (plural(n, "compression"), ME))
 
 
-COMMANDS = {"init": cmd_init, "wake": cmd_wake, "note": cmd_note,
-            "nap": cmd_nap, "recall": cmd_recall, "zoom": cmd_zoom,
-            "forget": cmd_forget, "config": cmd_config, "import": cmd_import}
+COMMANDS = {"init": cmd_init, "prompt": cmd_prompt, "wake": cmd_wake,
+            "note": cmd_note, "nap": cmd_nap, "recall": cmd_recall,
+            "zoom": cmd_zoom, "forget": cmd_forget, "config": cmd_config,
+            "import": cmd_import}
 
 
 def main():
@@ -839,20 +977,30 @@ def main():
         print(usage, file=sys.stderr)
         sys.exit(1)
     try:
-        # `init` is the only command that may run without an existing memory:
-        # it is the one that creates it. Every other command refuses, so a
-        # typo in MEMORY_DIR is an error instead of a second, empty identity.
-        if cmd == "init":
-            cmd_init(memory_dir(), sys.argv[2:])
+        # `init` and `prompt` are the only commands that may run without an
+        # existing memory: one creates it, the other only prints text. Every
+        # other command refuses, so standing in the wrong folder -- or a typo
+        # in MEMORY_DIR -- is an error instead of a second, empty identity.
+        if cmd == "prompt":
+            cmd_prompt(None, sys.argv[2:])
             return
-        d = store()
+        if cmd == "init":
+            cmd_init(init_target(), sys.argv[2:])
+            return
+        # `wake` is the session's first command, so it creates the memory when
+        # this project has none instead of ordering an init and a second wake.
+        d = wake_store() if cmd == "wake" else store()
         config(d)
         COMMANDS[cmd](d, sys.argv[2:])
     except OSError as e:
         # The filesystem is the one thing the tool does not control. Report it
         # the way every other failure is reported: a Python traceback tells an
         # agent nothing it can act on.
-        die("%s: %s." % (pretty(e.filename or memory_dir()), e.strerror or e))
+        # memory_dir() may be None now (no project memory found), so fall all
+        # the way back to the current directory: the message must always name
+        # a real place, and must never itself crash.
+        where = e.filename or memory_dir() or os.getcwd()
+        die("%s: %s." % (pretty(where), e.strerror or e))
 
 
 if __name__ == "__main__":

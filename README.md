@@ -1,25 +1,82 @@
 # OptMem
 
-Permanent memory for AI agents. A 426-token prompt, a script, plug and play.
+Permanent memory for AI agents, one memory per project. A short prompt, a
+script, plug and play.
+
+A fork of [VictorTaelin/OptMem](https://github.com/VictorTaelin/OptMem), where
+the memory is one per machine. Everything below that is not about *where* the
+memory lives is his design.
 
 ![how OptMem works](anim/optmem.gif)
 
 ## Install
 
+From a clone — this installs the copy you are looking at:
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/VictorTaelin/OptMem/main/install.sh | sh
+sh install.sh
 ```
 
-It prints a `## Memory` block. Paste that at the top of your agent's
-`AGENTS.md` (or `CLAUDE.md`), and you are done. Run the same line again to
-update.
+Or from the network:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/StockParrot/OptMem/main/install.sh | sh
+```
+
+Set `$OPTMEM_REPO` and `$OPTMEM_REF` to download from a fork or a branch
+instead. The installer refuses to finish if the copy it installed is too old
+to know about per-project memory, rather than leaving you to find out mid
+session.
+
+It prints a `## Memory` block. Paste that at the top of your agent's **global**
+`AGENTS.md` (or `CLAUDE.md`) — once, for every project. Run either line again
+to update.
 
 The tool lands at `~/.optmem/memo`; put `~/.optmem` on `PATH` to type `memo`.
+
+Then, inside each project you want remembered:
+
+```sh
+cd ~/projects/fruitSaladWebsite
+memo init
+```
+
+## One memory per project
+
+`memo init` creates a `memo/` folder at the root of the project you are in.
+Every other command finds it by walking up from the current directory, the way
+`git` finds `.git`. So the same tool, run in two projects, reads two separate
+memories — no environment variable, no configuration, and no way to mix them.
+
+```
+~/projects/rubberDuckiesSVGs/memo/    the duck memory
+~/projects/fruitSaladWebsite/memo/    the salad memory
+```
+
+`memo wake` in a project that has no memory yet creates one, and says which
+folder it chose. It is the first command of every session, so there is nothing
+yet to lose — and making an agent stop, run `init`, and wake a second time
+spends two round trips to arrive exactly where one arrives.
+
+Every *other* command refuses instead, and so does `wake` when `$MEMORY_DIR`
+names a store that is not there. A path you gave by hand is a claim about one
+specific memory, and the answer to a typo in it must never be a blank one:
+waking with no past looks exactly like amnesia.
+
+Because the search takes the *nearest* `memo/`, one inside a project would hide
+that project's own. `memo init` refuses to do that unless you ask with
+`memo init --here`.
+
+This is the whole of the design. Identity — who you work with, how they like
+things — belongs in `CLAUDE.md`, which is loaded every session anyway. The
+memory is for the evolving record of the work, and that record is per project.
 
 ## Commands
 
 | | |
 |---|---|
+| `memo init` | give this project a memory: create `./memo/` |
+| `memo prompt` | print the `## Memory` block; create nothing |
 | `memo wake` | read the memory — the first command of every session |
 | `memo note "..."` | record one memory: one line, up to 280 bytes |
 | `memo nap` | answer the merges that came due |
@@ -35,7 +92,10 @@ background.
 ```
 ~/.optmem/
   memo          the tool: one file of Python 3, no dependencies
-  memory/
+                installed once, shared by every project
+
+<project>/
+  memo/
     LOG.txt     every memory, one per line, append-only, never edited
     TREE/       the summaries: a cache, rebuildable from the log alone
     config      the sizes, written by `memo config`
@@ -54,7 +114,8 @@ recomputed.
 Records are fixed width, so position *is* identity and every lookup is one
 seek. At a million memories (608 MB), `wake` takes 0.03s.
 
-Set `$MEMORY_DIR` to keep `memory/` elsewhere — a synced folder, a git repo.
+Set `$MEMORY_DIR` to name one store outright, ignoring the search — for a
+memory kept outside its project, or a synced folder.
 
 ## The prompt
 
@@ -65,10 +126,11 @@ This is what the installer prints, and the whole of the integration.
 
 Your memory is OptMem:
 - The tool is `~/.optmem/memo`
-- Your memories are in `~/.optmem/memory`
+- Your memories live in the `memo/` folder at the root of the project
+  you are working in.
 
 OptMem outlives every session, compaction, model and vendor change.
-Without it you do not know who you are, or what was decided and tried.
+Without it you do not know what was decided and tried.
 
 ### At startup: activating OptMem (mandatory)
 
@@ -86,7 +148,7 @@ Do not register redundant memories.
 
 If `~/.optmem/memo note` asks a compression: do it before your next action.
 
-Never edit or delete anything under `~/.optmem/memory`: the tool manages it.
+Never edit or delete anything under `memo/`: the tool manages it.
 
 ### When you need an old memory: search, or navigate
 

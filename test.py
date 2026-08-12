@@ -145,47 +145,136 @@ check(ghost.returncode == 1 and "No memory at" in ghost.stderr,
       "a missing MEMORY_DIR was created instead of reported")
 check(not os.path.exists(d + "-typo"), "a missing MEMORY_DIR was created")
 
-# the fresh-user path: no MEMORY_DIR, wake refuses, init creates the memory,
-# prints the paste block, and is idempotent
+# the fresh-user path. Memory is PER PROJECT, found by walking up from the
+# current directory, so MEMORY_DIR is unset throughout this block: that is
+# the point -- the tool has to work on location alone.
 fresh = {k: v for k, v in os.environ.items() if k != "MEMORY_DIR"}
 fresh["HOME"] = tempfile.mkdtemp()
-noenv = subprocess.run(memo + ["wake"], capture_output=True, text=True, env=fresh)
+proj = tempfile.mkdtemp(prefix="optmem-proj-")    # a project with no memory
+deep = os.path.join(proj, "src", "components")    # a folder deep inside it
+os.makedirs(deep)
+
+
+def sh(*args, cwd=proj, env=fresh):
+    """One `memo` command, as a real process standing in a real folder. Which
+    folder IS the input under test now, so it can never be left implicit."""
+    return subprocess.run(memo + list(args), capture_output=True, text=True,
+                          cwd=cwd, env=env)
+
+
+# `prompt` prints the paste block and creates nothing: the installer runs it
+# in whatever folder the curl happened to land in
+pr = sh("prompt")
+check(pr.returncode == 0 and "## Memory" in pr.stdout and "You are a" in pr.stdout,
+      "prompt must print the AGENTS.md block")
+check(not os.path.exists(os.path.join(proj, "memo")),
+      "prompt created a memory; it must only ever print")
+
+# every command EXCEPT wake refuses when there is no memory anywhere above.
+# Refusing is what keeps the wrong folder an error instead of a second, empty
+# identity -- only wake, the session's first command, may create one.
+noenv = sh("note", "a memory with nowhere to go")
 check(noenv.returncode == 1 and "memo init" in noenv.stderr,
-      "with no MEMORY_DIR and no memory, wake must point at init")
-init = subprocess.run(memo + ["init"], capture_output=True, text=True, env=fresh)
-check(init.returncode == 0 and "## Memory" in init.stdout
-      and "You are a" in init.stdout, "init must print the AGENTS.md block")
-check(os.path.exists(os.path.join(fresh["HOME"], ".optmem", "memory", "config")),
-      "init must create ~/.optmem/memory with its config")
-again = subprocess.run(memo + ["init"], capture_output=True, text=True, env=fresh)
+      "with no project memory, note must refuse and point at init")
+check(not os.path.exists(os.path.join(proj, "memo")),
+      "a refused command created a memory")
+
+# init makes ./memo in the project we are standing in, and nowhere else
+init = sh("init")
+check(init.returncode == 0 and "Created" in init.stdout,
+      "init must create this project's memory: " + init.stdout + init.stderr)
+check(os.path.exists(os.path.join(proj, "memo", "config")),
+      "init must create ./memo with its config")
+check(not os.path.exists(os.path.join(fresh["HOME"], ".optmem", "memory")),
+      "init wrote a global store instead of the project's")
+again = sh("init")
 check(again.returncode == 0 and "Found" in again.stdout, "init must be idempotent")
-woke = subprocess.run(memo + ["wake"], capture_output=True, text=True, env=fresh)
+woke = sh("wake")
 check(woke.returncode == 0 and "You are awake." in woke.stdout,
       "after init, wake must work with zero configuration")
+
+# THE property the whole change exists for: the same tool, run deep inside
+# the project, walks up and finds the project's memory. No env, no config.
+sh("note", "a memory noted from the project root")
+deepwoke = sh("wake", cwd=deep)
+check(deepwoke.returncode == 0 and "from the project root" in deepwoke.stdout,
+      "a subfolder did not find the project's memory: " + deepwoke.stdout)
+
+# and two projects never, ever mix
+other = tempfile.mkdtemp(prefix="optmem-other-")
+sh("init", cwd=other)
+sh("note", "a memory belonging to the other project", cwd=other)
+mine, theirs = sh("wake"), sh("wake", cwd=other)
+check("other project" not in mine.stdout and "project root" not in theirs.stdout,
+      "two projects shared a memory")
+
+# a memory created inside a project would SHADOW that project's: every later
+# command would find the new one first and the older record would go quiet.
+# Refused by default, allowed only when asked for outright.
+shadow = sh("init", cwd=deep)
+check(shadow.returncode == 1 and "already covered" in shadow.stderr,
+      "init silently shadowed the memory above it: " + shadow.stdout)
+check(not os.path.exists(os.path.join(deep, "memo")),
+      "a refused init still created a store")
+forced = sh("init", "--here", cwd=deep)
+check(forced.returncode == 0 and os.path.exists(os.path.join(deep, "memo")),
+      "init --here did not create a nested memory: " + forced.stderr)
+check("hides" in forced.stdout, "init --here did not say that it shadows")
+check(sh("wake", cwd=deep).stdout.count("from the project root") == 0,
+      "the nested memory did not shadow the one above it")
+
+# wake is the one command that creates. It is the first call of every
+# session, so it makes the memory instead of spending two round trips
+# ordering an `init` and then a second wake.
+bare_proj = tempfile.mkdtemp(prefix="optmem-bare-")
+first = sh("wake", cwd=bare_proj)
+check(first.returncode == 0 and "Created" in first.stdout
+      and "No memories yet" in first.stdout,
+      "wake did not create a missing project memory: "
+      + first.stdout + first.stderr)
+check(os.path.exists(os.path.join(bare_proj, "memo", "config")),
+      "wake created no ./memo with its config")
+# the only thing that can be wrong is WHICH folder it chose, so it has to
+# name it and say how to move it
+check(bare_proj in first.stdout and "memo init" in first.stdout,
+      "wake did not name the folder it chose, or how to move it")
+second = sh("wake", cwd=bare_proj)
+check("Created" not in second.stdout and "You are awake." in second.stdout,
+      "the second wake created the memory all over again")
+
+# but an explicit $MEMORY_DIR pointing at nothing is still refused, by wake
+# too: that is a claim about ONE specific memory, and the answer to a typo
+# in it must never be a blank one
+typo = sh("wake", cwd=bare_proj, env=dict(fresh, MEMORY_DIR=bare_proj + "-typo"))
+check(typo.returncode == 1 and "No memory at" in typo.stderr,
+      "wake invented a store for a mistyped MEMORY_DIR: " + typo.stdout)
+check(not os.path.exists(bare_proj + "-typo"), "wake created a mistyped store")
 
 # Every command the tool prints must RUN on the machine it printed it on.
 # `curl | sh` puts nothing on PATH, so a bare `memo nap ...` would not: the
 # whole loop (note -> merge prompt -> nap) dies on `command not found`.
+# The printed order also has to survive the CWD it is run in: discovery is
+# by directory now, so a command copied out of a prompt only works while the
+# agent is still standing in the project. It runs here from `proj`.
 bare = dict(fresh, PATH="/usr/bin:/bin")
-subprocess.run(memo + ["note", "the first thing that happened"], env=bare,
-               capture_output=True)
-asked = subprocess.run(memo + ["note", "the second thing that happened"],
-                       env=bare, capture_output=True, text=True)
+sh("note", "the first thing that happened", env=bare)
+asked = sh("note", "the second thing that happened", env=bare)
 order = [l[5:] for l in asked.stdout.splitlines() if l.startswith("Run: ")]
 check(len(order) == 1, "note did not order a compression: " + asked.stdout)
 obeyed = subprocess.run(order[0].replace('"<your line>"', '"both things"'),
-                        shell=True, env=bare, capture_output=True, text=True)
+                        shell=True, cwd=proj, env=bare, capture_output=True,
+                        text=True)
 check(obeyed.returncode == 0 and "saved" in obeyed.stdout,
       "the order the tool printed does not run with nothing on PATH: %r -> %s"
       % (order[0], obeyed.stderr.strip()))
 
 # a size written by hand into `config` must not brick the tool with a
 # recovery that is itself broken: name the file and the line
-badcfg = os.path.join(fresh["HOME"], ".optmem", "memory", "config")
+badcfg = os.path.join(proj, "memo", "config")
 with open(badcfg, "a") as f:
     f.write("WAKE_LNES = 100\n")
 for c in (["wake"], ["config"]):
-    r_ = subprocess.run(memo + c, capture_output=True, text=True, env=fresh)
+    r_ = sh(*c)
     check(r_.returncode == 1 and "config line" in r_.stderr
           and "WAKE_LNES" in r_.stderr,
           "a typo in config does not say where it is: " + r_.stderr)
@@ -610,5 +699,7 @@ check(r.stdout.rstrip().endswith("You are awake."), "wake broke after re-init")
 
 shutil.rmtree(d2)
 shutil.rmtree(d)
+for tmp in (proj, other, bare_proj, fresh["HOME"]):   # per-project fixtures
+    shutil.rmtree(tmp, ignore_errors=True)
 print("\n%d passed, %d failed" % (ok, fail))
 sys.exit(1 if fail else 0)
