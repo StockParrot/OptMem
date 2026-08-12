@@ -800,6 +800,26 @@ def cmd_note(d, args):
         print("\n" + nap)
 
 
+def cmd_tnote(d, args):
+    if len(args) != 2:
+        die("usage: %s tnote <YYYY-MM-DD> \"<one line, at most %d bytes>\""
+            % (ME, ENTRY_CHARS))
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?", args[0].strip())
+    if not m:
+        die("%s is not an ISO 8601 date." % args[0].strip())
+    date = "%s-%s-%s" % m.groups()
+    try:
+        datetime.datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        die("%s is not a real date." % date)
+    text = check(args[1])
+    i = log_append(d, [(date, text)])
+    print("Saved as #%d." % i)
+    nap = next_nap(d, i + 1)
+    if nap:
+        print("\n" + nap)
+
+
 def cmd_nap(d, args):
     T, said = log_len(d), False
     if args:
@@ -961,7 +981,8 @@ def cmd_import(d, args):
 
 
 COMMANDS = {"init": cmd_init, "prompt": cmd_prompt, "wake": cmd_wake,
-            "note": cmd_note, "nap": cmd_nap, "recall": cmd_recall,
+            "note": cmd_note, "tnote": cmd_tnote, "nap": cmd_nap,
+            "recall": cmd_recall,
             "zoom": cmd_zoom, "forget": cmd_forget, "config": cmd_config,
             "import": cmd_import}
 
