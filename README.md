@@ -11,30 +11,15 @@ memory lives is his design.
 
 ## Install
 
-From a clone — this installs the copy you are looking at:
-
-```sh
-sh install.sh
-```
-
-Or from the network:
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/StockParrot/OptMem/main/install.sh | sh
 ```
-
-Set `$OPTMEM_REPO` and `$OPTMEM_REF` to download from a fork or a branch
-instead. The installer refuses to finish if the copy it installed is too old
-to know about per-project memory, rather than leaving you to find out mid
-session.
 
 It prints a `## Memory` block. Paste that at the top of your agent's **global**
 `AGENTS.md` (or `CLAUDE.md`) — once, for every project. Run either line again
 to update.
 
 The tool lands at `~/.optmem/memo`; put `~/.optmem` on `PATH` to type `memo`.
-
-That is the whole setup. There is no per-project step.
 
 ## One memory per project
 
@@ -52,15 +37,6 @@ configuration, and no way to mix them.
 Nothing needs preparing first. `wake` is the session's opening call, so it
 makes the memory itself rather than spending two round trips having one made
 and then waking again.
-
-Every *other* command refuses when it finds no memory, and so does `wake` when
-`$MEMORY_DIR` names a store that is not there. A path you gave by hand is a
-claim about one specific memory, and the answer to a typo in it must never be
-a blank one: waking with no past looks exactly like amnesia.
-
-This is the whole of the design. Identity — who you work with, how they like
-things — belongs in `CLAUDE.md`, which is loaded every session anyway. The
-memory is for the evolving record of the work, and that record is per project.
 
 ## Commands
 
