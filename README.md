@@ -34,38 +34,29 @@ to update.
 
 The tool lands at `~/.optmem/memo`; put `~/.optmem` on `PATH` to type `memo`.
 
-Then, inside each project you want remembered:
-
-```sh
-cd ~/projects/fruitSaladWebsite
-memo init
-```
+That is the whole setup. There is no per-project step.
 
 ## One memory per project
 
-`memo init` creates a `memo/` folder at the root of the project you are in.
-Every other command finds it by walking up from the current directory, the way
-`git` finds `.git`. So the same tool, run in two projects, reads two separate
-memories — no environment variable, no configuration, and no way to mix them.
+The first `memo wake` inside a project creates a `memo/` folder at its root,
+and says which folder it chose. Every command finds it from then on by walking
+up from the current directory, the way `git` finds `.git`. So the same tool,
+run in two projects, reads two separate memories — no environment variable, no
+configuration, and no way to mix them.
 
 ```
 ~/projects/rubberDuckiesSVGs/memo/    the duck memory
 ~/projects/fruitSaladWebsite/memo/    the salad memory
 ```
 
-`memo wake` in a project that has no memory yet creates one, and says which
-folder it chose. It is the first command of every session, so there is nothing
-yet to lose — and making an agent stop, run `init`, and wake a second time
-spends two round trips to arrive exactly where one arrives.
+Nothing needs preparing first. `wake` is the session's opening call, so it
+makes the memory itself rather than spending two round trips having one made
+and then waking again.
 
-Every *other* command refuses instead, and so does `wake` when `$MEMORY_DIR`
-names a store that is not there. A path you gave by hand is a claim about one
-specific memory, and the answer to a typo in it must never be a blank one:
-waking with no past looks exactly like amnesia.
-
-Because the search takes the *nearest* `memo/`, one inside a project would hide
-that project's own. `memo init` refuses to do that unless you ask with
-`memo init --here`.
+Every *other* command refuses when it finds no memory, and so does `wake` when
+`$MEMORY_DIR` names a store that is not there. A path you gave by hand is a
+claim about one specific memory, and the answer to a typo in it must never be
+a blank one: waking with no past looks exactly like amnesia.
 
 This is the whole of the design. Identity — who you work with, how they like
 things — belongs in `CLAUDE.md`, which is loaded every session anyway. The
