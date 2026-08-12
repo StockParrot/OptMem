@@ -75,8 +75,6 @@ memory is for the evolving record of the work, and that record is per project.
 
 | | |
 |---|---|
-| `memo init` | give this project a memory: create `./memo/` |
-| `memo prompt` | print the `## Memory` block; create nothing |
 | `memo wake` | read the memory — the first command of every session |
 | `memo note "..."` | record one memory: one line, up to 280 bytes |
 | `memo nap` | answer the merges that came due |
