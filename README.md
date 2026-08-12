@@ -16,8 +16,8 @@ curl -fsSL https://raw.githubusercontent.com/StockParrot/OptMem/main/install.sh 
 ```
 
 It prints a `## Memory` block. Paste that at the top of your agent's **global**
-`AGENTS.md` (or `CLAUDE.md`) — once, for every project. Run either line again
-to update.
+`AGENTS.md` (or `CLAUDE.md`) — once, for every project. Run the install line
+again to update.
 
 The tool lands at `~/.optmem/memo`; put `~/.optmem` on `PATH` to type `memo`.
 
